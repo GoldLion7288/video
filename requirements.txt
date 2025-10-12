@@ -1,0 +1,8 @@
+PyQt5==5.15.11
+PyQt5-Qt5==5.15.17
+PyQt5_sip==12.17.0
+opencv-python>=4.0.0
+numpy==2.3.3
+bcc==0.1.10
+traitlets==5.14.3
+traittypes==0.2.1
