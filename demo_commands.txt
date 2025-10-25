@@ -1,0 +1,35 @@
+# Video Player Demo Commands
+# Copy and paste these commands to test the functionality
+
+# 1. Test single image file (3 seconds)
+./run.sh play "test/2.jpg" 3
+
+# 2. Test single video file (10 seconds) 
+./run.sh play "test/1.mp4" 10
+
+# 3. Test another image (5 seconds)
+./run.sh play "test/3.jpg" 5
+
+# 4. Test with full path (8 seconds)
+./run.sh play "/home/administrator001/Downloads/player/test/4.jpg" 8
+
+# 5. Test playlist mode
+./run.sh start playlist.csv
+
+# 6. Test single-instance behavior:
+# First terminal:
+./run.sh start playlist.csv &
+
+# Second terminal (after a few seconds):
+./run.sh play "test/1.mp4" 15
+./run.sh play "test/2.jpg" 5
+./run.sh play "test/3.jpg" 3
+
+# 7. Show help
+./run.sh
+
+# Expected Results:
+# - Each single file command opens a player window
+# - Files play for exactly the specified duration
+# - Player closes automatically when finished
+# - Single-instance mode forwards commands to running player

@@ -79,3 +79,10 @@ Edit `playlist.csv` to customize your media:
 ```
 
 Format: `index,file_path,duration_seconds`
+
+# in cmd
+./run.sh start playlist.csv
+./run.sh play test/2.jpg 3
+
+./run.sh stop
+./run.sh exit

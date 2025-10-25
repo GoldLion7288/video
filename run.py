@@ -137,7 +137,7 @@ class GStreamerVideoPlayer(QtWidgets.QWidget):
         return 0
 
 class VideoPlayer(QtWidgets.QWidget):
-    def __init__(self, playlist_file):
+    def __init__(self, playlist_file, auto_fullscreen=False):
         super().__init__()
         def resource_path(relative_path):
             if hasattr(sys, '_MEIPASS'):
@@ -151,18 +151,13 @@ class VideoPlayer(QtWidgets.QWidget):
         self.screen_width = self.screen_geometry.width()
         self.screen_height = self.screen_geometry.height()
         
-        # Set fixed window size (you can change these values)
-        # Always set window size to 1/3 of the screen (width and height)
-        self.FIXED_WIDTH = int(self.screen_width // 1.5)
-        self.FIXED_HEIGHT = int(self.screen_height // 1)
-        
-        # Ensure size doesn't exceed screen
-        self.FIXED_WIDTH = min(self.FIXED_WIDTH, self.screen_width - 100)
-        self.FIXED_HEIGHT = min(self.FIXED_HEIGHT, self.screen_height - 100)
+        # Set window size to full screen
+        self.FIXED_WIDTH = self.screen_width
+        self.FIXED_HEIGHT = self.screen_height
 
-        # Option 5: Center (uncomment to use)
-        x = (self.screen_width - self.FIXED_WIDTH) // 2
-        y = (self.screen_height - self.FIXED_HEIGHT) // 2
+        # Position window to cover full screen
+        x = 0
+        y = 0
         
         self.resize(self.FIXED_WIDTH, self.FIXED_HEIGHT)
         self.setGeometry(x, y, self.FIXED_WIDTH, self.FIXED_HEIGHT)
@@ -242,8 +237,20 @@ class VideoPlayer(QtWidgets.QWidget):
         QTimer.singleShot(100, self.position_overlay_controls)
         QTimer.singleShot(100, self.position_overlay_title_bar)
 
-        self.playlist = self.load_playlist(playlist_file)
+        # Initialize single file mode flag
+        self.is_single_file_mode = False
+        
+        # Load playlist if provided, otherwise create empty playlist
+        if playlist_file:
+            self.playlist = self.load_playlist(playlist_file)
+        else:
+            self.playlist = []
         self.current_index = 0
+        
+        # Set up command monitoring for single-instance mode
+        self.command_timer = QTimer()
+        self.command_timer.timeout.connect(self.check_for_commands)
+        self.command_timer.start(1000)  # Check every second
 
         # Create media player for videos
         self.media_player = QMediaPlayer()
@@ -265,6 +272,10 @@ class VideoPlayer(QtWidgets.QWidget):
         # self.play_next()  # <-- REMOVE or COMMENT OUT this line
 
         self.clear_layout()  # <-- ADD THIS LINE HERE
+        
+        # Auto-fullscreen for playlist mode
+        if auto_fullscreen:
+            QTimer.singleShot(500, self.toggle_fullscreen)  # Delay to ensure window is ready
         self.center_on_screen()  # <-- ADD THIS LINE HERE
 
         # Timer for detecting long press
@@ -1878,8 +1889,8 @@ class VideoPlayer(QtWidgets.QWidget):
             print(f"Playlist file not found: {file_path}")
             # Create a sample playlist for testing
             return [
-                {'path': 'test_image.jpg', 'duration': 3},
-                {'path': 'test_video.mp4', 'duration': 10}
+                {'path': 'test_image.jpg', 'duration': 3, 'start_time': '08:00:00', 'end_time': '08:00:03'},
+                {'path': 'test_video.mp4', 'duration': 10, 'start_time': '08:00:03', 'end_time': '08:00:13'}
             ]
         
         try:
@@ -1891,8 +1902,26 @@ class VideoPlayer(QtWidgets.QWidget):
                     parts = line.split(',')
                     if len(parts) < 3:
                         continue
-                    index, path, duration = parts
-                    playlist.append({'path': path, 'duration': int(duration)})
+                    
+                    # Handle both old format (3 fields) and new format (5+ fields)
+                    if len(parts) >= 5:
+                        # New format: index, path, duration, start_time, end_time
+                        index, path, duration, start_time, end_time = parts[:5]
+                        playlist.append({
+                            'path': path, 
+                            'duration': int(duration),
+                            'start_time': start_time,
+                            'end_time': end_time
+                        })
+                    else:
+                        # Old format: index, path, duration
+                        index, path, duration = parts[:3]
+                        playlist.append({
+                            'path': path, 
+                            'duration': int(duration),
+                            'start_time': '00:00:00',
+                            'end_time': '00:00:00'
+                        })
         except Exception as e:
             print(f"Error loading playlist: {e}")
             
@@ -1939,6 +1968,12 @@ class VideoPlayer(QtWidgets.QWidget):
         if not os.path.exists(path):
             print(f"File not found: {path}")
             if auto_advance:
+                # In single file mode, just close the application
+                if self.is_single_file_mode:
+                    print("Single file not found, exiting")
+                    self.close()
+                    return
+                
                 self.current_index += 1
                 if self.current_index >= len(self.playlist):
                     self.current_index = 0
@@ -2078,7 +2113,11 @@ class VideoPlayer(QtWidgets.QWidget):
             self.position_overlay_title_bar()
         
         # Set timer for next item
-        self.safe_timer_singleShot(duration * 1000, self.play_next)
+        if self.is_single_file_mode:
+            # In single file mode, close after duration
+            QTimer.singleShot(duration * 1000, self.close)
+        else:
+            self.safe_timer_singleShot(duration * 1000, self.play_next)
 
     def clear_layout(self, show_background=True):
         try:
@@ -2513,7 +2552,11 @@ class VideoPlayer(QtWidgets.QWidget):
                 print(f"OpenCV video finished after {current_time:.2f} seconds")
                 # Reset video state before moving to next
                 self.currently_playing_video = False
-                self.safe_timer_singleShot(500, self.play_next)
+                if self.is_single_file_mode:
+                    print("Single file playback completed, closing application")
+                    self.close()
+                else:
+                    self.safe_timer_singleShot(500, self.play_next)
                 return
             
             # Read frame
@@ -2548,7 +2591,11 @@ class VideoPlayer(QtWidgets.QWidget):
                 print("OpenCV video finished (end of file)")
                 # Reset video state before moving to next
                 self.currently_playing_video = False
-                self.safe_timer_singleShot(500, self.play_next)
+                if self.is_single_file_mode:
+                    print("Single file playback completed, closing application")
+                    self.close()
+                else:
+                    self.safe_timer_singleShot(500, self.play_next)
                 
         except Exception as e:
             print(f"Error updating video frame: {e}")
@@ -2561,8 +2608,80 @@ class VideoPlayer(QtWidgets.QWidget):
                 print(f"Error releasing video capture in exception handler: {release_error}")
             # Reset video state before moving to next
             self.currently_playing_video = False
-            self.safe_timer_singleShot(1000, self.play_next)
+            if self.is_single_file_mode:
+                print("Single file playback completed, closing application")
+                self.close()
+            else:
+                self.safe_timer_singleShot(1000, self.play_next)
 
+    def play_single_file(self, file_path, duration):
+        """Play a single file for specified duration, then continue with playlist"""
+        print(f"Playing single file: {file_path} for {duration} seconds, then continuing with playlist")
+        
+        # Load the full playlist
+        playlist_path = "playlist.csv"
+        if os.path.exists(playlist_path):
+            self.playlist = self.load_playlist(playlist_path)
+        else:
+            # Create a sample playlist if none exists
+            self.playlist = [
+                {'path': 'test/4.jpg', 'duration': 1, 'start_time': '08:00:00', 'end_time': '08:00:01'},
+                {'path': 'test/3.jpg', 'duration': 1, 'start_time': '08:00:01', 'end_time': '08:00:02'},
+                {'path': 'test/2.jpg', 'duration': 30, 'start_time': '08:00:02', 'end_time': '08:00:32'},
+                {'path': 'test/1.mp4', 'duration': 10, 'start_time': '08:00:32', 'end_time': '08:00:42'},
+                {'path': 'repeat', 'duration': 0, 'start_time': '08:00:42', 'end_time': '08:00:42'}
+            ]
+        
+        # Find the specified file in the playlist
+        file_found = False
+        for i, item in enumerate(self.playlist):
+            if item['path'] == file_path:
+                self.current_index = i
+                # Override the duration with the specified duration
+                self.playlist[i]['duration'] = duration
+                file_found = True
+                print(f"Found file at index {i}, overriding duration to {duration} seconds")
+                break
+        
+        if not file_found:
+            # If file not found in playlist, add it at the beginning
+            print(f"File not found in playlist, adding at beginning")
+            self.playlist.insert(0, {'path': file_path, 'duration': duration, 'start_time': '00:00:00', 'end_time': '00:00:00'})
+            self.current_index = 0
+        
+        # Not single file mode - will continue with playlist
+        self.is_single_file_mode = False
+        
+        # Start playing the file
+        self.play_current()
+
+    def check_for_commands(self):
+        """Check for incoming commands from other instances"""
+        import tempfile
+        
+        command_file = os.path.join(tempfile.gettempdir(), 'video_player_command.txt')
+        
+        try:
+            if os.path.exists(command_file):
+                with open(command_file, 'r') as f:
+                    command_line = f.read().strip()
+                
+                if command_line:
+                    parts = command_line.split(',')
+                    if len(parts) >= 3 and parts[0] == 'play':
+                        file_path = parts[1]
+                        duration = int(parts[2])
+                        
+                        print(f"Received command: play {file_path} for {duration} seconds")
+                        
+                        # Execute the command
+                        self.play_single_file(file_path, duration)
+                        
+                        # Remove the command file
+                        os.remove(command_file)
+                        
+        except Exception as e:
+            print(f"Error checking for commands: {e}")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2751,24 +2870,129 @@ class AlertMessage(QtWidgets.QDialog):
             screen.center().y() - size.height() // 2
         )
 
-if __name__ == "__main__":
-    app = QtWidgets.QApplication(sys.argv)
-    app.setApplicationName("Viewer")
-    playlist_path = "playlist.csv"
+def parse_arguments():
+    """Parse command line arguments"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Video Player with Playlist Support')
+    parser.add_argument('--start', help='Start player with playlist file')
+    parser.add_argument('--play', nargs=2, metavar=('FILE_PATH', 'DURATION'), 
+                       help='Play specific file for duration seconds')
+    parser.add_argument('--single-instance', action='store_true', 
+                       help='Enable single instance mode (VLC-like behavior)')
+    
+    return parser.parse_args()
+
+def check_single_instance():
+    """Check if another instance is already running"""
+    import fcntl
+    import tempfile
+    
+    lock_file = os.path.join(tempfile.gettempdir(), 'video_player.lock')
+    
+    try:
+        # Try to create and lock the file
+        with open(lock_file, 'w') as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            f.write(str(os.getpid()))
+            return False  # No other instance running
+    except (IOError, OSError):
+        return True  # Another instance is running
+
+def send_command_to_instance(file_path, duration):
+    """Send play command to running instance via file"""
+    import tempfile
+    
+    command_file = os.path.join(tempfile.gettempdir(), 'video_player_command.txt')
+    try:
+        with open(command_file, 'w') as f:
+            f.write(f"play,{file_path},{duration}\n")
+        print(f"Command sent to running instance: play {file_path} for {duration} seconds")
+        return True
+    except Exception as e:
+        print(f"Failed to send command to running instance: {e}")
+        return False
+
+def create_sample_playlist(playlist_path):
+    """Create sample playlist file"""
     if not os.path.exists(playlist_path):
         print(f"Creating sample playlist file: {playlist_path}")
         with open(playlist_path, 'w') as f:
-            f.write("1,test/4.jpg,5\n")
-            f.write("2,test/3.jpg,5\n")
-            f.write("3,test/2.jpg,30\n")
-            f.write("4,test/1.mp4,60\n")
-            f.write("5,repeat,0\n")
+            f.write("1,test/4.jpg,1,08:00:00,08:00:01,\n")
+            f.write("2,test/3.jpg,1,08:00:01,08:00:02,\n")
+            f.write("3,test/2.jpg,30,08:00:02,08:00:32,\n")
+            f.write("4,test/1.mp4,60,08:00:32,08:01:32,\n")
+            f.write("5,repeat,0,08:01:32,08:01:32,\n")
         print("Sample playlist created. Please add your media files and update the playlist.")
+
+if __name__ == "__main__":
+    args = parse_arguments()
+    
+    # Handle single-instance mode
+    if args.single_instance or args.play:
+        if args.play:
+            # Check if another instance is running
+            if check_single_instance():
+                # Another instance is running, send command to it
+                file_path, duration = args.play
+                duration = int(duration)
+                
+                if not os.path.exists(file_path):
+                    print(f"Error: File '{file_path}' not found!")
+                    sys.exit(1)
+                
+                if send_command_to_instance(file_path, duration):
+                    print("Command sent to running instance successfully")
+                    sys.exit(0)
+                else:
+                    print("Failed to send command to running instance")
+                    sys.exit(1)
+            else:
+                # No other instance running, start new one
+                print("No running instance found, starting new player...")
+        else:
+            # Start mode with single-instance check
+            if check_single_instance():
+                print("Another instance is already running. Use --play command to send commands to it.")
+                sys.exit(1)
+    
+    app = QtWidgets.QApplication(sys.argv)
+    app.setApplicationName("Viewer")
     
     try:
-        player = VideoPlayer(playlist_path)
-        player.show()
-        sys.exit(app.exec_())
+        if args.start:
+            # Start mode with playlist - auto fullscreen
+            playlist_path = args.start
+            create_sample_playlist(playlist_path)
+            player = VideoPlayer(playlist_path, auto_fullscreen=True)
+            player.show()
+            sys.exit(app.exec_())
+            
+        elif args.play:
+            # Play mode with specific file and duration
+            file_path, duration = args.play
+            duration = int(duration)
+            
+            if not os.path.exists(file_path):
+                print(f"Error: File '{file_path}' not found!")
+                sys.exit(1)
+            
+            # Create player with playlist for continuous playback
+            playlist_path = "playlist.csv"
+            create_sample_playlist(playlist_path)
+            player = VideoPlayer(playlist_path, auto_fullscreen=False)
+            player.play_single_file(file_path, duration)
+            player.show()
+            sys.exit(app.exec_())
+            
+        else:
+            # Default mode - use default playlist (no auto fullscreen)
+            playlist_path = "playlist.csv"
+            create_sample_playlist(playlist_path)
+            player = VideoPlayer(playlist_path, auto_fullscreen=False)
+            player.show()
+            sys.exit(app.exec_())
+            
     except Exception as e:
         print(f"Error running application: {e}")
         sys.exit(1)
